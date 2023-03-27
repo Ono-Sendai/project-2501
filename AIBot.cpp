@@ -1,5 +1,11 @@
+/*=====================================================================
+AIBot.cpp
+---------
+Copyright Nicholas Chapman 2023 -
+=====================================================================*/
 
 
+#include "Weather.h"
 #include <ConPrint.h>
 #include <Exception.h>
 #include <Clock.h>
@@ -16,13 +22,7 @@
 #include <whisper.cpp/whisper.h>
 #include <SDL.h>
 #include <sapi.h> // Speech API
-
-
-static void checkNodeType(const JSONNode& node, JSONNode::Type type)
-{
-	if(node.type != type)
-		throw glare::Exception("Expected type " + JSONNode::typeString(type) + ", got type " + JSONNode::typeString(node.type) + ".");
-}
+#include <sphelper.h>
 
 
 static inline void throwOnError(HRESULT hres)
@@ -54,34 +54,231 @@ static void audioCallback(
 }
 
 
+static void check_result(HRESULT hr)
+{
+	if(FAILED(hr))
+		throw glare::Exception("Call failed: " + PlatformUtils::getLastErrorString());
+}
+
+
+// Adapted from https://stackoverflow.com/questions/16547349/sapi-speech-to-text-example among other sources
+const ULONGLONG grammarId = 0;
+const wchar_t* ruleName1 = L"rule1";
+
+/**
+* Create and initialize the Grammar.
+* Create a rule for the grammar.
+* Add word to the grammar.
+*/
+ISpRecoGrammar* init_grammar(ISpRecoContext* recoContext, const std::string& command)
+{
+	HRESULT hr;
+	SPSTATEHANDLE rule_state;
+
+	ISpRecoGrammar* recoGrammar;
+	hr = recoContext->CreateGrammar(grammarId, &recoGrammar);
+	check_result(hr);
+
+	// deactivate the grammar to prevent premature recognitions to an "under-construction" grammar
+	hr = recoGrammar->SetGrammarState(SPGS_DISABLED);
+	check_result(hr);
+
+	//WORD langId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+	//WORD langId = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT);
+	hr = recoGrammar->ResetGrammar(GetUserDefaultUILanguage());
+	check_result(hr);
+
+	// Create rules
+	hr = recoGrammar->GetRule(ruleName1, 0, SPRAF_TopLevel | SPRAF_Active, /*fCreateIfNotExist=*/true, &rule_state);
+	check_result(hr);
+
+	// Add a word
+	hr = recoGrammar->AddWordTransition(rule_state, 
+		NULL, // hToState - set to null make this a transition to the terminal state.
+		StringUtils::UTF8ToPlatformUnicodeEncoding(command).c_str(), // word
+		L" ", // transition word separation characters
+		SPWT_LEXICAL, 
+		1.f, // weight
+		NULL); // pPropInfo
+	check_result(hr);
+
+	// Commit changes
+	hr = recoGrammar->Commit(0);
+	check_result(hr);
+
+	// activate the grammar since "construction" is finished,
+	//    and ready for receiving recognitions  (see https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ms723630(v=vs.85))
+	hr = recoGrammar->SetGrammarState(SPGS_ENABLED);
+	check_result(hr);
+
+
+	// activate the e-mail rule to begin receiving recognitions
+	hr = recoGrammar->SetRuleState(ruleName1, NULL, SPRS_ACTIVE);
+	check_result(hr);
+
+	return recoGrammar;
+}
+
+
+struct VoiceCommandContext
+{
+	SDL_AudioDeviceID audio_dev_id;
+	const SDL_AudioSpec* obtained_spec;
+	std::vector<float>* audio_data;
+	struct whisper_context* whisper_ctx;
+	std::string openai_api_key;
+	ISpVoice* voice;
+	std::string current_weather;
+
+	std::string query;
+};
+
+
+void doVoiceCommand(VoiceCommandContext& context)
+{
+	// Record a few seconds of audio
+	context.audio_data->clear();
+	SDL_PauseAudioDevice(context.audio_dev_id, /*pause_on=*/SDL_FALSE); // Start recording
+
+	conPrint("-----------------------Recording...-----------------------");
+
+	const double desired_num_secs = 4;
+	while(context.audio_data->size() < context.obtained_spec->freq * desired_num_secs)
+	{
+		PlatformUtils::Sleep(1);
+	}
+
+	SDL_PauseAudioDevice(context.audio_dev_id, /*pause_on=*/SDL_TRUE); // Pause recording
+	conPrint("-----------------------Recording stopped.-----------------------");
+
+
+
+
+	struct whisper_full_params whisper_params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+	whisper_params.n_threads = 8; // myMax(1u, PlatformUtils::getNumLogicalProcessors());
+	whisper_params.print_special = false;
+	whisper_params.suppress_blank = true;
+	//whisper_params.duration_ms = 1000;
+	//whisper_params.speed_up = true;
+
+	Timer timer;
+
+	if(whisper_full(context.whisper_ctx, whisper_params, context.audio_data->data(), (int)context.audio_data->size()) != 0) {
+	//if(whisper_full_parallel(context.whisper_ctx, whisper_params, context.audio_data->data(), (int)context.audio_data->size(), whisper_params.n_threads) != 0) {
+		throw glare::Exception("failed to process audio");
+	}
+
+	conPrint("Whisper inference took " + timer.elapsedString());
+
+	std::string combined_text = "";
+
+	const int n_segments = whisper_full_n_segments(context.whisper_ctx);
+	//printVar(n_segments);
+	for (int i = 0; i < n_segments; ++i)
+	{
+		std::string segment_text = whisper_full_get_segment_text(context.whisper_ctx, i);
+		conPrint(segment_text);
+
+		combined_text += segment_text;
+		if(i + 1 < n_segments)
+			combined_text += " ";
+	}
+
+
+
+	context.query += "You: " + combined_text + " \n";
+	context.query += "Project 2501: ";
+
+	conPrint("========================================================");
+	conPrint("query: " + context.query);
+	conPrint("========================================================");
+
+	//return;
+
+	{
+		HTTPClient http_client;
+		http_client.additional_headers.push_back("Content-Type: application/json");
+		http_client.additional_headers.push_back("Authorization: Bearer " + context.openai_api_key);
+
+		const std::string escaped_query = web::Escaping::JSONEscape(context.query);
+		const std::string post_content = "{\"model\": \"text-davinci-003\", \"prompt\": \"" + escaped_query + "\", \"temperature\": 0, \"max_tokens\": 100}";
+
+		std::string data;
+		HTTPClient::ResponseInfo response_info = http_client.sendPost(
+			"https://api.openai.com/v1/completions", 
+			post_content, 
+			"application/json",
+			data);
+
+		//conPrint(response_info.response_message);
+		//conPrint(data);
+
+		/*
+		Example response:
+		{
+		"id":"cmpl-6pcyOPK1Y1YEHEZpxRz1sFs2ZOcGB",
+		"object":"text_completion",
+		"created":1677762560,
+		"model":"text-davinci-003",
+		"choices":[
+			{"text":"\n\nSubstrata VR is a virtual reality","index":0,"logprobs":null,"finish_reason":"length"}
+		],
+		"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}
+		}
+		*/
+
+		if(response_info.response_code >= 200 && response_info.response_code < 300)
+		{
+			JSONParser parser;
+			parser.parseBuffer(data.c_str(), data.size());
+
+			const JSONNode& root = parser.nodes[0];
+			checkNodeType(root, JSONNode::Type_Object);
+
+			const JSONNode& choices_node = root.getChildArray(parser, "choices");
+
+			for(size_t i=0; i<choices_node.child_indices.size(); ++i)
+			{
+				const JSONNode& choice_node = parser.nodes[choices_node.child_indices[i]];
+
+				const std::string text = choice_node.getChildStringValue(parser, "text");
+
+				conPrint(text);
+
+				context.query += text + "\n";
+
+				// Speak the response text
+				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(text).c_str(), 0, NULL);
+				if(FAILED(hr))
+					throw glare::Exception("voice->Speak failed.");
+			}
+		}
+		else
+			throw glare::Exception("non-200 HTTP response code: " + toString(response_info.response_code) + ", " + response_info.response_message);
+	}
+}
+
+
 int main(int /*argc*/, char** /*argv*/)
 {
 	Clock::init();
 	Networking::createInstance();
 
-	if(true)
 	try
 	{
+		const std::string current_weather = getCurrentWeather();
+
 		const std::string openai_api_key = ::stripHeadAndTailWhitespace(FileUtils::readEntireFile("N:\\aibot\\trunk\\openai_API_key.txt"));
+
 
 		//----------------------------- Initialise whisper ------------------------------------
 		struct whisper_context* whisper_ctx = whisper_init_from_file("N:\\aibot\\trunk\\ggml-base.en.bin");
 
 
-		//----------------------------- Initialise speech API (for text to speech) ------------------------------------
-		if(FAILED(::CoInitialize(NULL)))
-			throw glare::Exception("COM init failed");
-
-		ISpVoice* voice = NULL;
-		HRESULT hr = CoCreateInstance(CLSID_SpVoice, NULL, CLSCTX_ALL, IID_ISpVoice, (void**)&voice);
-		if(FAILED(hr))
-			throw glare::Exception("CoCreateInstance failed for creating voice object: " + PlatformUtils::getLastErrorString());
-
-
 		//----------------------------- Initialise loopback or microphone Audio capture ------------------------------------
 		if(SDL_Init(SDL_INIT_AUDIO) != 0)
 			throw glare::Exception("SDL_Init Error: " + std::string(SDL_GetError()));
-		
+
 		const int device_count = SDL_GetNumAudioDevices(/*is capture=*/SDL_TRUE);
 
 		for(int i=0; i<device_count; ++i)
@@ -92,8 +289,8 @@ int main(int /*argc*/, char** /*argv*/)
 
 		const char* dev_name = SDL_GetAudioDeviceName(/*index=*/0, /*is capture=*/SDL_TRUE);
 
+		
 		std::vector<float> audio_data;
-
 		const int audio_num_samples = 256;
 
 		SDL_AudioSpec desired_spec;
@@ -115,132 +312,116 @@ int main(int /*argc*/, char** /*argv*/)
 		printVar(obtained_spec.channels);
 		printVar(obtained_spec.samples);
 
-		
-		//----------------------------------------------------------------------------------------
-		std::string query = "The assistant is helpful, creative, clever, and very friendly.";
+
+		//----------------------------- Initialise speech API (for text to speech) ------------------------------------
+		if(FAILED(::CoInitialize(NULL)))
+			throw glare::Exception("COM init failed");
+
+		ISpVoice* voice = NULL;
+		HRESULT hr = CoCreateInstance(CLSID_SpVoice, NULL, CLSCTX_ALL, IID_ISpVoice, (void**)&voice);
+		if(FAILED(hr))
+			throw glare::Exception("CoCreateInstance failed for creating voice object: " + PlatformUtils::getLastErrorString());
+
+
+		ISpRecognizer* recognizer = NULL;
+		hr = CoCreateInstance(CLSID_SpInprocRecognizer/*CLSID_SpSharedRecognizer*/, nullptr, CLSCTX_ALL, IID_ISpRecognizer, (void**)(&recognizer));
+		if(FAILED(hr))
+			throw glare::Exception("CoCreateInstance failed for creating recogniser object: " + PlatformUtils::getLastErrorString());
+
+
+		// Set up the inproc recognizer audio
+		// input with an audio input object token.
+
+		// Get the default audio input token.
+		CComPtr<ISpObjectToken>      cpObjectToken;
+		CComPtr<ISpAudio>            cpAudio;
+		hr = SpGetDefaultTokenFromCategoryId(SPCAT_AUDIOIN, &cpObjectToken);
+		check_result(hr);
+
+		// Set the audio input to our token.
+		hr = recognizer->SetInput(cpObjectToken, TRUE);
+		check_result(hr);
+
+		// Set up the inproc recognizer audio input with an audio input object.
+
+		// Create the default audio input object.
+		hr = SpCreateDefaultObjectFromCategoryId(SPCAT_AUDIOIN, &cpAudio);
+		check_result(hr);
+
+		// Set the audio input to our object.
+		hr = recognizer->SetInput(cpAudio, TRUE);
+		check_result(hr);
+
+		// Ask the shared recognizer to re-check the default audio input token.
+	//	hr = recognizer->SetInput(NULL, TRUE);
+	//	check_result(hr);
+
+		ISpRecoContext* recog_context = NULL;
+		hr = recognizer->CreateRecoContext(&recog_context);
+		if(FAILED(hr))
+			throw glare::Exception("CreateRecoContext failed: " + PlatformUtils::getLastErrorString());
+
+		recog_context->Pause(0);
+
+
+		ISpRecoGrammar* recoGrammar = init_grammar(recog_context, "hey twenty");
+
+		hr = recog_context->SetNotifyWin32Event();
+		check_result(hr);
+
+
+		HANDLE recognition_event;
+		recognition_event = recog_context->GetNotifyEventHandle();
+		if(recognition_event == INVALID_HANDLE_VALUE)
+			throw glare::Exception("GetNotifyEventHandle failed.");
+			
+
+		ULONGLONG interest;
+		interest = SPFEI(SPEI_RECOGNITION);
+		hr = recog_context->SetInterest(interest, interest);
+		check_result(hr);
+
+		// Activate Grammar
+		hr = recoGrammar->SetRuleState(ruleName1, 0, SPRS_ACTIVE);
+		check_result(hr);
+
+		// Enable context
+		hr = recog_context->Resume(0);
+		check_result(hr);
+
+		VoiceCommandContext context;
+		context.audio_dev_id = audio_dev_id;
+		context.obtained_spec = &obtained_spec;
+		context.audio_data = &audio_data;
+		context.whisper_ctx = whisper_ctx;
+		context.openai_api_key = openai_api_key;
+		context.voice = voice;
+		context.current_weather = current_weather;
+
+		std::string base_prompt = "The current time is " + Clock::getAsciiTime() + "\n";
+		base_prompt += "The current weather is " + context.current_weather + "\n";
+		base_prompt += "Project 2501 is helpful, creative, clever, and very friendly.\n";
+		context.query = base_prompt;
 
 		while(1)
 		{
-			PlatformUtils::Sleep(2000);
-
-			// Record a few seconds of audio
-			audio_data.clear();
-			SDL_PauseAudioDevice(audio_dev_id, /*pause_on=*/SDL_FALSE); // Start recording
-
-			conPrint("-----------------------Recording...-----------------------");
-		
-			const double desired_num_secs = 4;
-			while(audio_data.size() < obtained_spec.freq * desired_num_secs)
+			DWORD result = WaitForSingleObject(recognition_event, 1000);
+			if(result == WAIT_OBJECT_0)
 			{
-				PlatformUtils::Sleep(1);
+				conPrint("Recognised word!");
+				
+				recognizer->SetRecoState(SPRST_INACTIVE); // Pause trigger word detection while we do a voice command and speak the response.
+
+				doVoiceCommand(context);
+
+				recognizer->SetRecoState(SPRST_ACTIVE);
 			}
-			
-			SDL_PauseAudioDevice(audio_dev_id, /*pause_on=*/SDL_TRUE); // Pause recording
-			conPrint("-----------------------Recording stopped.-----------------------");
-
-
-
-
-			struct whisper_full_params whisper_params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-			whisper_params.n_threads = myMax(1u, PlatformUtils::getNumLogicalProcessors() / 2);
-			whisper_params.print_special = false;
-			whisper_params.suppress_blank = true;
-			//whisper_params.duration_ms = 1000;
-
-			Timer timer;
-
-			if(whisper_full(whisper_ctx, whisper_params, audio_data.data(), (int)audio_data.size()) != 0) {
-			//if(whisper_full_parallel(whisper_ctx, whisper_params, audio_data.data(), (int)audio_data.size(), whisper_params.n_threads) != 0) {
-				throw glare::Exception("failed to process audio");
-			}
-
-			conPrint("Whisper inference took " + timer.elapsedString());
-
-			std::string combined_text = "";
-
-			const int n_segments = whisper_full_n_segments(whisper_ctx);
-			//printVar(n_segments);
-			for (int i = 0; i < n_segments; ++i)
+			else
 			{
-				std::string segment_text = whisper_full_get_segment_text(whisper_ctx, i);
-				conPrint(segment_text);
-
-				combined_text += segment_text;
-				if(i + 1 < n_segments)
-					combined_text += " ";
+				conPrintStr(".");
 			}
+		}
 
-
-
-			query += "You: " + combined_text + " \n";
-			query += "The assistant: ";
-
-			conPrint("========================================================");
-			conPrint("query: " + query);
-
-			
-
-			{
-				HTTPClient http_client;
-				http_client.additional_headers.push_back("Content-Type: application/json");
-				http_client.additional_headers.push_back("Authorization: Bearer " + openai_api_key);
-			
-				const std::string escaped_query = web::Escaping::JSONEscape(query);
-				const std::string post_content = "{\"model\": \"text-davinci-003\", \"prompt\": \"" + escaped_query + "\", \"temperature\": 0, \"max_tokens\": 100}";
-
-				std::string data;
-				HTTPClient::ResponseInfo response_info = http_client.sendPost(
-					"https://api.openai.com/v1/completions", 
-					post_content, 
-					"application/json",
-					data);
-
-				conPrint(response_info.response_message);
-				conPrint(data);
-
-				/*
-				{
-					"id":"cmpl-6pcyOPK1Y1YEHEZpxRz1sFs2ZOcGB",
-					"object":"text_completion",
-					"created":1677762560,
-					"model":"text-davinci-003",
-					"choices":[
-						{"text":"\n\nSubstrata VR is a virtual reality","index":0,"logprobs":null,"finish_reason":"length"}
-						],
-					"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}
-				}
-				*/
-
-				if(response_info.response_code >= 200 && response_info.response_code < 300)
-				{
-					JSONParser parser;
-					parser.parseBuffer(data.c_str(), data.size());
-
-					const JSONNode& root = parser.nodes[0];
-					checkNodeType(root, JSONNode::Type_Object);
-
-					const JSONNode& choices_node = root.getChildArray(parser, "choices");
-
-					for(size_t i=0; i<choices_node.child_indices.size(); ++i)
-					{
-						const JSONNode& choice_node = parser.nodes[choices_node.child_indices[i]];
-
-						const std::string text = choice_node.getChildStringValue(parser, "text");
-
-						conPrint(text);
-
-						query += text + "\n";
-
-						// Speak the response text
-						hr = voice->Speak(StringUtils::UTF8ToWString(text).c_str(), 0, NULL);
-						if(FAILED(hr))
-							throw glare::Exception("voice->Speak failed.");
-					}
-				}
-				else
-					throw glare::Exception("non-200 HTTP response code: " + toString(response_info.response_code) + ", " + response_info.response_message);
-			}
-		} // end while(1) loop
 	}
 	catch(glare::Exception& e)
 	{
