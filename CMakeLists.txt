@@ -15,6 +15,8 @@ if(WIN32)
 	add_definitions(-D__SSE3__ -D__SSSE3__ -D__SSE4_1__)
 	
 	add_definitions(-D__WINDOWS_MM__=1)
+	
+	add_definitions(/wd4996) # Suppress "warning C4996: 'GetVersionExW': was declared deprecated"
 else()
 	
 endif()
@@ -175,6 +177,8 @@ set(aibot
 AIBot.cpp
 Weather.cpp
 Weather.h
+VolumeControl.cpp
+VolumeControl.h
 notes.txt
 )
 

@@ -6,6 +6,7 @@ Copyright Nicholas Chapman 2023 -
 
 
 #include "Weather.h"
+#include "VolumeControl.h"
 #include <ConPrint.h>
 #include <Exception.h>
 #include <Clock.h>
@@ -14,6 +15,7 @@ Copyright Nicholas Chapman 2023 -
 #include <JSONParser.h>
 #include <PlatformUtils.h>
 #include <Timer.h>
+#include <Parser.h>
 #include <ComObHandle.h>
 #include <maths/mathstypes.h>
 #include <webserver/Escaping.h>
@@ -120,6 +122,13 @@ ISpRecoGrammar* init_grammar(ISpRecoContext* recoContext, const std::string& com
 }
 
 
+struct ChatMessage
+{
+	std::string role;
+	std::string content;
+};
+
+
 struct VoiceCommandContext
 {
 	SDL_AudioDeviceID audio_dev_id;
@@ -130,12 +139,16 @@ struct VoiceCommandContext
 	ISpVoice* voice;
 	std::string current_weather;
 
-	std::string query;
+	//std::string query;
+	std::string base_prompt;
+
+	std::vector<ChatMessage> chat_messages;
 };
 
 
 void doVoiceCommand(VoiceCommandContext& context)
 {
+#if 1
 	// Record a few seconds of audio
 	context.audio_data->clear();
 	SDL_PauseAudioDevice(context.audio_dev_id, /*pause_on=*/SDL_FALSE); // Start recording
@@ -183,14 +196,30 @@ void doVoiceCommand(VoiceCommandContext& context)
 		if(i + 1 < n_segments)
 			combined_text += " ";
 	}
+#else
+	//std::string combined_text = "What is one plus two?";
+	std::string combined_text = "Set the volume to 0.1";
+#endif
 
 
+	context.chat_messages.push_back(ChatMessage({"user", combined_text}));
 
-	context.query += "You: " + combined_text + " \n";
-	context.query += "Project 2501: ";
+	//context.query += "User: " + combined_text + " \n";
+	//context.query += "Project 2501: ";
+	const std::string use_prompt = context.base_prompt; // StringUtils::replaceCharacter(context.base_prompt, '\n', ' ');
+
+	std::string messages_json = "[{\"role\": \"system\", \"content\": \"" + web::Escaping::JSONEscape(use_prompt) + "\"},";
+	for(size_t z=0; z<context.chat_messages.size(); ++z)
+	{
+		messages_json += "{\"role\": \"" + context.chat_messages[z].role + "\", \"content\": \"" + web::Escaping::JSONEscape(context.chat_messages[z].content) + "\"}";
+		if(z + 1 < context.chat_messages.size())
+			messages_json += ",";
+	}
+	messages_json += "]";
+
 
 	conPrint("========================================================");
-	conPrint("query: " + context.query);
+	conPrint("messages_json: " + messages_json);
 	conPrint("========================================================");
 
 	//return;
@@ -200,18 +229,25 @@ void doVoiceCommand(VoiceCommandContext& context)
 		http_client.additional_headers.push_back("Content-Type: application/json");
 		http_client.additional_headers.push_back("Authorization: Bearer " + context.openai_api_key);
 
-		const std::string escaped_query = web::Escaping::JSONEscape(context.query);
-		const std::string post_content = "{\"model\": \"text-davinci-003\", \"prompt\": \"" + escaped_query + "\", \"temperature\": 0, \"max_tokens\": 100}";
+		//const std::string escaped_query = web::Escaping::JSONEscape(context.query);
+		//const std::string post_content = "{\"model\": \"text-davinci-003\", \"prompt\": \"" + escaped_query + "\", \"temperature\": 0, \"max_tokens\": 100}";
+		const std::string post_content = 
+		"{" \
+		"	\"model\": \"gpt-3.5-turbo\"," \
+		"	\"messages\": " + messages_json + 
+		"}";
+
+		conPrint(post_content);
 
 		std::string data;
 		HTTPClient::ResponseInfo response_info = http_client.sendPost(
-			"https://api.openai.com/v1/completions", 
+			"https://api.openai.com/v1/chat/completions", // "https://api.openai.com/v1/completions", 
 			post_content, 
 			"application/json",
 			data);
 
-		//conPrint(response_info.response_message);
-		//conPrint(data);
+		conPrint(response_info.response_message);
+		conPrint(data);
 
 		/*
 		Example response:
@@ -229,28 +265,67 @@ void doVoiceCommand(VoiceCommandContext& context)
 
 		if(response_info.response_code >= 200 && response_info.response_code < 300)
 		{
-			JSONParser parser;
-			parser.parseBuffer(data.c_str(), data.size());
+			JSONParser json_parser;
+			json_parser.parseBuffer(data.c_str(), data.size());
 
-			const JSONNode& root = parser.nodes[0];
+			const JSONNode& root = json_parser.nodes[0];
 			checkNodeType(root, JSONNode::Type_Object);
 
-			const JSONNode& choices_node = root.getChildArray(parser, "choices");
+			const JSONNode& choices_node = root.getChildArray(json_parser, "choices");
 
 			for(size_t i=0; i<choices_node.child_indices.size(); ++i)
 			{
-				const JSONNode& choice_node = parser.nodes[choices_node.child_indices[i]];
+				const JSONNode& choice_node = json_parser.nodes[choices_node.child_indices[i]];
 
-				const std::string text = choice_node.getChildStringValue(parser, "text");
+				const JSONNode message_node = choice_node.getChildObject(json_parser, "message");
 
-				conPrint(text);
+				const std::string role = message_node.getChildStringValue(json_parser, "role");
+				const std::string content = message_node.getChildStringValue(json_parser, "content");
+				//const std::string text = choice_node.getChildStringValue(parser, "text");
 
-				context.query += text + "\n";
+				conPrint("role: " + role);
+				conPrint("content: " + content);
+
+				//context.query += text + "\n";
+				context.chat_messages.push_back(ChatMessage({"assistant", content}));
+
+				// Process response
+				const size_t set_volume_pos = content.find("set-volume");
+				if(set_volume_pos != std::string::npos)
+				{
+					Parser parser(content);
+					parser.setCurrentPos(set_volume_pos);
+					bool res = parser.parseCString("set-volume");
+					assert(res);
+					parser.parseWhiteSpace();
+					float volume;
+					if(parser.parseFloat(volume))
+					{
+						volume = myClamp(volume, 0.f, 0.4f); // TEMP
+						setSystemVolume(volume);
+
+						//const std::string msg_to_speak = "The volume has been set to " + doubleToStringMaxNDecimalPlaces(volume, 2);
+						//HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(msg_to_speak).c_str(), 0, NULL);
+						//if(FAILED(hr))
+						//	throw glare::Exception("voice->Speak failed.");
+
+					}
+					else
+					{
+						conPrint("Failed to parse volume from '" + content + "'");
+					}
+				}
+				else
+				{
+					
+				}
 
 				// Speak the response text
-				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(text).c_str(), 0, NULL);
+				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(content).c_str(), 0, NULL);
 				if(FAILED(hr))
 					throw glare::Exception("voice->Speak failed.");
+				
+				break;
 			}
 		}
 		else
@@ -323,48 +398,30 @@ int main(int /*argc*/, char** /*argv*/)
 			throw glare::Exception("CoCreateInstance failed for creating voice object: " + PlatformUtils::getLastErrorString());
 
 
-		ISpRecognizer* recognizer = NULL;
-		hr = CoCreateInstance(CLSID_SpInprocRecognizer/*CLSID_SpSharedRecognizer*/, nullptr, CLSCTX_ALL, IID_ISpRecognizer, (void**)(&recognizer));
+		// Initialise speech recoginition
+		ComObHandle<ISpRecognizer> recognizer;
+		hr = CoCreateInstance(CLSID_SpInprocRecognizer, nullptr, CLSCTX_ALL, IID_ISpRecognizer, (void**)(&recognizer.ptr));
 		if(FAILED(hr))
 			throw glare::Exception("CoCreateInstance failed for creating recogniser object: " + PlatformUtils::getLastErrorString());
 
 
-		// Set up the inproc recognizer audio
-		// input with an audio input object token.
-
-		// Get the default audio input token.
-		CComPtr<ISpObjectToken>      cpObjectToken;
-		CComPtr<ISpAudio>            cpAudio;
-		hr = SpGetDefaultTokenFromCategoryId(SPCAT_AUDIOIN, &cpObjectToken);
-		check_result(hr);
-
-		// Set the audio input to our token.
-		hr = recognizer->SetInput(cpObjectToken, TRUE);
-		check_result(hr);
-
-		// Set up the inproc recognizer audio input with an audio input object.
-
-		// Create the default audio input object.
-		hr = SpCreateDefaultObjectFromCategoryId(SPCAT_AUDIOIN, &cpAudio);
+		ComObHandle<ISpAudio> audio_stream;
+		hr = SpCreateDefaultObjectFromCategoryId(SPCAT_AUDIOIN, &audio_stream.ptr);
 		check_result(hr);
 
 		// Set the audio input to our object.
-		hr = recognizer->SetInput(cpAudio, TRUE);
+		hr = recognizer->SetInput(audio_stream.ptr, TRUE);
 		check_result(hr);
 
-		// Ask the shared recognizer to re-check the default audio input token.
-	//	hr = recognizer->SetInput(NULL, TRUE);
-	//	check_result(hr);
-
-		ISpRecoContext* recog_context = NULL;
-		hr = recognizer->CreateRecoContext(&recog_context);
+		ComObHandle<ISpRecoContext> recog_context;
+		hr = recognizer->CreateRecoContext(&recog_context.ptr);
 		if(FAILED(hr))
 			throw glare::Exception("CreateRecoContext failed: " + PlatformUtils::getLastErrorString());
 
 		recog_context->Pause(0);
 
 
-		ISpRecoGrammar* recoGrammar = init_grammar(recog_context, "hey twenty");
+		ISpRecoGrammar* recoGrammar = init_grammar(recog_context.ptr, "hey twenty");
 
 		hr = recog_context->SetNotifyWin32Event();
 		check_result(hr);
@@ -398,11 +455,23 @@ int main(int /*argc*/, char** /*argv*/)
 		context.voice = voice;
 		context.current_weather = current_weather;
 
-		std::string base_prompt = "The current time is " + Clock::getAsciiTime() + "\n";
+		std::string base_prompt;
+		base_prompt += "You are a helpful assistant who can also execute commands.\n";
+		base_prompt += "The user input is from voice recognition so may be recognised incorrectly.\n";
+		base_prompt += "The current time is " + Clock::getAsciiTime() + ".\n";
 		base_prompt += "The current weather is " + context.current_weather + "\n";
-		base_prompt += "Project 2501 is helpful, creative, clever, and very friendly.\n";
-		context.query = base_prompt;
+		base_prompt += getSystemVolumeDescription();
+		//base_prompt += "Project 2501 is helpful, creative, clever, and very friendly.\n";
+		//base_prompt += "If the user wants to set the volume, Project 2501 should reply with \n";
+		base_prompt += "If the user wants to set the volume, execute the command set-volume x, where x is the requested volume.\n";
+		base_prompt += "Example: Please set to the volume to 0.3.\n";
+		base_prompt += "Output: set-volume 0.3.\n";
+		//base_prompt += "Allowed volume values range from 0 to 1.\n";
+		//context.query = base_prompt;
+		context.base_prompt = base_prompt;
 
+		//doVoiceCommand(context);
+		//return 0;
 		while(1)
 		{
 			DWORD result = WaitForSingleObject(recognition_event, 1000);
