@@ -39,7 +39,7 @@ Project 2501 is written in C++, and currently works only on Windows (due to use 
 
 ## Demo video
 
-[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/dVGtIcNIZr8/0.jpg)](https://www.youtube.com/embed/dVGtIcNIZr8)
+[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/_ZjIgY5OnT0/0.jpg)](https://www.youtube.com/embed/_ZjIgY5OnT0)
 
 ## Building
 
