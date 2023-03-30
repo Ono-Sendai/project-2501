@@ -166,7 +166,7 @@ void doVoiceCommand(VoiceCommandContext& context)
 	SDL_PauseAudioDevice(context.audio_dev_id, /*pause_on=*/SDL_TRUE); // Pause recording
 	conPrint("-----------------------Recording stopped.-----------------------");
 
-
+	conPrint("Processing speech (doing Whisper inference)...");
 
 	struct whisper_full_params whisper_params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 	whisper_params.n_threads = 8; // myMax(1u, PlatformUtils::getNumLogicalProcessors()); // NOTE: Whisper multithreading has serious problems, use an artifically low number of threads.  See https://github.com/ggerganov/whisper.cpp/issues/200#issuecomment-1484025515
@@ -323,11 +323,19 @@ int main(int /*argc*/, char** /*argv*/)
 	{
 		const std::string current_weather = getCurrentWeather();
 
-		const std::string openai_api_key = ::stripHeadAndTailWhitespace(FileUtils::readEntireFile("N:\\aibot\\trunk\\openai_API_key.txt"));
+		// Read OpenAI API key from disk
+		const std::string API_key_path = PlatformUtils::getCurrentWorkingDirPath() + "/openai_API_key.txt";
+		conPrint("Reading OpenAI API key from '" + API_key_path + "'...");
+		if(!FileUtils::fileExists(API_key_path))
+			throw glare::Exception("Please place your OpenAI API key in '" + API_key_path + "'.");
+		const std::string openai_api_key = ::stripHeadAndTailWhitespace(FileUtils::readEntireFile(API_key_path));
 
 
 		//----------------------------- Initialise whisper ------------------------------------
-		struct whisper_context* whisper_ctx = whisper_init_from_file("N:\\aibot\\trunk\\ggml-base.en.bin");
+		const std::string whisper_params_path = PlatformUtils::getCurrentWorkingDirPath() + "/ggml-base.en.bin";
+		struct whisper_context* whisper_ctx = whisper_init_from_file(whisper_params_path.c_str());
+		if(whisper_ctx == NULL)
+			throw glare::Exception("Failed to load Whisper parameters from '" + whisper_params_path + "'.");
 
 
 		//----------------------------- Initialise loopback or microphone Audio capture ------------------------------------
