@@ -42,7 +42,6 @@ endif()
 
 message("GLARE_CORE_TRUNK: ${GLARE_CORE_TRUNK}")
 message("GLARE_CORE_LIBS_DIR: ${GLARE_CORE_LIBS_DIR}")
-message("SDL_DIR: ${SDL_DIR}")
 message("SDL_BUILD_DIR: ${SDL_BUILD_DIR}")
 message("libressldir: ${libressldir}")
 

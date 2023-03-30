@@ -29,3 +29,65 @@ Project 2501 is written in C++, and currently works only on Windows (due to use 
 ## Demo video
 
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/dVGtIcNIZr8/0.jpg)](https://www.youtube.com/embed/dVGtIcNIZr8)
+
+## Building
+
+### Prerequisites
+
+Windows and Visual Studio 2022.  
+"C++ ATL for latest xx build tools" should be selected/installed in the Visual Studio Installer.
+
+You will need Ruby installed (for build_libressl.rb script)
+
+For running the program, you will need a microphone that your computer can detect.
+
+### Getting Glare-Core
+
+Check out https://github.com/glaretechnologies/glare-core to a directory
+
+### Build LibreSSL
+
+Define the GLARE_CORE_LIBS environment variable, to something like c:\programming.
+This is the directory the LibreSSL directory will be made in.
+
+Build LibreSSL by changing into the scripts directory in glare-core (whereever you checked it out), then running build_libressl.rb:
+
+```
+ cd glare-core/trunk 
+ ruby build_libressl.rb
+```
+This should build files into e.g. C:\programming\LibreSSL\libressl-3.5.2-x64-vs2022-install-debug and 
+C:\programming\LibreSSL\libressl-3.5.2-x64-vs2022-install
+
+### Building SDL
+
+Get the latest Simple DirectMedia Layer (SDL) code from https://www.libsdl.org/ and build it.
+
+### Run CMake
+
+Make a build directory, and run cmake, using the locations where you checked out the project-2501 and 
+glare-core code and where you built SDL.
+
+```
+mkdir project_2509_build_dir
+cd project_2509_build_dir
+cmake N:\project-2501\trunk\ -DGLARE_CORE_TRUNK=n:/glare-core/trunk -DSDL_BUILD_DIR=C:/programming/SDL/sdl_build_vs2022
+```
+
+
+Now open aibot.sln and build it.
+
+## Getting Data files
+
+
+### OpenAI API key
+
+You will need an OpenAI API key, which is free and comes with some free credit.
+Place in e.g. project_2509_build_dir\openai_API_key.txt.  
+The program will complain if it can't find it and tell you where to put it.
+
+### whisper.cpp weights
+
+This file contains the parameters for the Whisper neural network.
+
+Download ggml-base.en.bin from https://huggingface.co/ggerganov/whisper.cpp/tree/main and place in project_2509_build_dir.
