@@ -4,6 +4,8 @@ Project 2501 is an open-source AI assistant, written in C++.
 
 Currently it can tell you the time, the weather, or any information it knows about from having read basically the entire internet :)
 
+You can speak to it and it will speak back to you.
+
 Project 2501 is a fun project to experiment with a partially-offline AI assistant.   There's lots of stuff I want to add to it:
 
 * Store all previous conversations locally, and access them with associative memory.  This way Project 2501 can remember the details of previous conversations.
@@ -14,11 +16,20 @@ Project 2501 is a fun project to experiment with a partially-offline AI assistan
 
 * Try one of the offline/local large-language models.
 
+## Capabilities
+
+Project 2501 can currently tell you the time, tell you the weather outside (current location hard-coded to Wellington, NZ), 
+tell you the current system volume, allow you to set the volume, and tell you about anything it knows about 
+(more or less the entire internet up the Chat GPT Training data).
+
+Adding a new capability is a matter of writing a little C++ code to query the system, or querying an internet API, and presenting the results
+as a string to the chat system.
+
 ## How it works
 
 I use Windows Speech API (SAPI) for Wake-word detection, as SAPI uses very little CPU, unlike Whisper.cpp.
 
-Once the wake-word/phrase is detected ("Hey Twenty"), I use Whisper.cpp (https://github.com/ggerganov/whisper.cpp) for text-to-speech.  This works pretty well but is a bit slow.  This should be faster when some mulithreading issues in Whisper.cpp are fixed (see https://github.com/ggerganov/whisper.cpp/issues/200#issuecomment-1484025515)
+Once the wake-word/phrase ("Hey Twenty") is detected, I use Whisper.cpp (https://github.com/ggerganov/whisper.cpp) for text-to-speech.  This works pretty well but is a bit slow.  This should be faster when some mulithreading issues in Whisper.cpp are fixed (see https://github.com/ggerganov/whisper.cpp/issues/200#issuecomment-1484025515)
 
 Once the voice query has been converted to text, it's sent off to OpenAI's chat API (similar to ChatGPT).
 
