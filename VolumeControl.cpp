@@ -6,11 +6,11 @@ Copyright Nicholas Chapman 2023 -
 #include "VolumeControl.h"
 
 
-#include <ComObHandle.h>
-#include <Exception.h>
-#include <PlatformUtils.h>
-#include <StringUtils.h>
-#include <IncludeWindows.h>
+#include <utils/ComObHandle.h>
+#include <utils/Exception.h>
+#include <utils/PlatformUtils.h>
+#include <utils/StringUtils.h>
+#include <utils/IncludeWindows.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
 

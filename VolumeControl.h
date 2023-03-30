@@ -14,6 +14,3 @@ void setSystemVolume(float volume);
 float getSystemVolume();
 
 std::string getSystemVolumeDescription();
-
-
-

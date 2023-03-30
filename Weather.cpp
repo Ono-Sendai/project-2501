@@ -13,6 +13,7 @@ Copyright Nicholas Chapman 2023 -
 #include <utils/StringUtils.h>
 
 
+// NOTE: Location is currently hardcoded to Wellington, NZ.
 std::string getCurrentWeather()
 {
 	HTTPClient http_client;

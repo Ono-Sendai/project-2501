@@ -7,24 +7,24 @@ Copyright Nicholas Chapman 2023 -
 
 #include "Weather.h"
 #include "VolumeControl.h"
-#include <ConPrint.h>
-#include <Exception.h>
-#include <Clock.h>
-#include <FileUtils.h>
-#include <StringUtils.h>
-#include <JSONParser.h>
-#include <PlatformUtils.h>
-#include <Timer.h>
-#include <Parser.h>
-#include <ComObHandle.h>
+#include <whisper.cpp/whisper.h>
 #include <maths/mathstypes.h>
 #include <webserver/Escaping.h>
 #include <networking/Networking.h>
 #include <networking/HTTPClient.h>
-#include <whisper.cpp/whisper.h>
-#include <SDL.h>
-#include <sapi.h> // Speech API
-#include <sphelper.h>
+#include <utils/ConPrint.h>
+#include <utils/Exception.h>
+#include <utils/Clock.h>
+#include <utils/FileUtils.h>
+#include <utils/StringUtils.h>
+#include <utils/JSONParser.h>
+#include <utils/PlatformUtils.h>
+#include <utils/Timer.h>
+#include <utils/Parser.h>
+#include <utils/ComObHandle.h>
+#include <SDL.h> // Simple DirectMedia Layer header
+#include <sapi.h> // Microsoft Speech API header
+#include <sphelper.h> // NOTE: You will need ATL installed for this header file. ("C++ ATL for latest xx build tools" in Visual Studio Installer).  TODO: remove use of this.
 
 
 static inline void throwOnError(HRESULT hres)
@@ -63,7 +63,9 @@ static void check_result(HRESULT hr)
 }
 
 
-// Adapted from https://stackoverflow.com/questions/16547349/sapi-speech-to-text-example among other sources
+// Adapted from https://stackoverflow.com/questions/16547349/sapi-speech-to-text-example
+// https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee125667(v=vs.85)
+// etc.
 const ULONGLONG grammarId = 0;
 const wchar_t* ruleName1 = L"rule1";
 
@@ -139,8 +141,7 @@ struct VoiceCommandContext
 	ISpVoice* voice;
 	std::string current_weather;
 
-	//std::string query;
-	std::string base_prompt;
+	std::string base_prompt; // Used for 'system' message.
 
 	std::vector<ChatMessage> chat_messages;
 };
@@ -150,10 +151,11 @@ void doVoiceCommand(VoiceCommandContext& context)
 {
 #if 1
 	// Record a few seconds of audio
+	// TODO: Record until user stops speaking.
 	context.audio_data->clear();
 	SDL_PauseAudioDevice(context.audio_dev_id, /*pause_on=*/SDL_FALSE); // Start recording
 
-	conPrint("-----------------------Recording...-----------------------");
+	conPrint("-----------------------Recording, please speak a question... -----------------------");
 
 	const double desired_num_secs = 4;
 	while(context.audio_data->size() < context.obtained_spec->freq * desired_num_secs)
@@ -166,9 +168,8 @@ void doVoiceCommand(VoiceCommandContext& context)
 
 
 
-
 	struct whisper_full_params whisper_params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-	whisper_params.n_threads = 8; // myMax(1u, PlatformUtils::getNumLogicalProcessors());
+	whisper_params.n_threads = 8; // myMax(1u, PlatformUtils::getNumLogicalProcessors()); // NOTE: Whisper multithreading has serious problems, use an artifically low number of threads.  See https://github.com/ggerganov/whisper.cpp/issues/200#issuecomment-1484025515
 	whisper_params.print_special = false;
 	whisper_params.suppress_blank = true;
 	//whisper_params.duration_ms = 1000;
@@ -177,7 +178,7 @@ void doVoiceCommand(VoiceCommandContext& context)
 	Timer timer;
 
 	if(whisper_full(context.whisper_ctx, whisper_params, context.audio_data->data(), (int)context.audio_data->size()) != 0) {
-	//if(whisper_full_parallel(context.whisper_ctx, whisper_params, context.audio_data->data(), (int)context.audio_data->size(), whisper_params.n_threads) != 0) {
+	//if(whisper_full_parallel(context.whisper_ctx, whisper_params, context.audio_data->data(), (int)context.audio_data->size(), whisper_params.n_threads) != 0) {  // This is buggy, doesn't seem to recoginise any words at all.
 		throw glare::Exception("failed to process audio");
 	}
 
@@ -186,7 +187,6 @@ void doVoiceCommand(VoiceCommandContext& context)
 	std::string combined_text = "";
 
 	const int n_segments = whisper_full_n_segments(context.whisper_ctx);
-	//printVar(n_segments);
 	for (int i = 0; i < n_segments; ++i)
 	{
 		std::string segment_text = whisper_full_get_segment_text(context.whisper_ctx, i);
@@ -204,8 +204,6 @@ void doVoiceCommand(VoiceCommandContext& context)
 
 	context.chat_messages.push_back(ChatMessage({"user", combined_text}));
 
-	//context.query += "User: " + combined_text + " \n";
-	//context.query += "Project 2501: ";
 	const std::string use_prompt = context.base_prompt; // StringUtils::replaceCharacter(context.base_prompt, '\n', ' ');
 
 	std::string messages_json = "[{\"role\": \"system\", \"content\": \"" + web::Escaping::JSONEscape(use_prompt) + "\"},";
@@ -221,8 +219,6 @@ void doVoiceCommand(VoiceCommandContext& context)
 	conPrint("========================================================");
 	conPrint("messages_json: " + messages_json);
 	conPrint("========================================================");
-
-	//return;
 
 	{
 		HTTPClient http_client;
@@ -249,19 +245,6 @@ void doVoiceCommand(VoiceCommandContext& context)
 		conPrint(response_info.response_message);
 		conPrint(data);
 
-		/*
-		Example response:
-		{
-		"id":"cmpl-6pcyOPK1Y1YEHEZpxRz1sFs2ZOcGB",
-		"object":"text_completion",
-		"created":1677762560,
-		"model":"text-davinci-003",
-		"choices":[
-			{"text":"\n\nSubstrata VR is a virtual reality","index":0,"logprobs":null,"finish_reason":"length"}
-		],
-		"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}
-		}
-		*/
 
 		if(response_info.response_code >= 200 && response_info.response_code < 300)
 		{
@@ -272,21 +255,21 @@ void doVoiceCommand(VoiceCommandContext& context)
 			checkNodeType(root, JSONNode::Type_Object);
 
 			const JSONNode& choices_node = root.getChildArray(json_parser, "choices");
+			if(choices_node.child_indices.empty())
+				throw glare::Exception("Choices array was empty.");
 
-			for(size_t i=0; i<choices_node.child_indices.size(); ++i)
+			//for(size_t i=0; i<choices_node.child_indices.size(); ++i)
 			{
-				const JSONNode& choice_node = json_parser.nodes[choices_node.child_indices[i]];
+				const JSONNode& choice_node = json_parser.nodes[choices_node.child_indices[0]]; // Use first (zeroth) choice.
 
 				const JSONNode message_node = choice_node.getChildObject(json_parser, "message");
 
 				const std::string role = message_node.getChildStringValue(json_parser, "role");
 				const std::string content = message_node.getChildStringValue(json_parser, "content");
-				//const std::string text = choice_node.getChildStringValue(parser, "text");
 
 				conPrint("role: " + role);
 				conPrint("content: " + content);
 
-				//context.query += text + "\n";
 				context.chat_messages.push_back(ChatMessage({"assistant", content}));
 
 				// Process response
@@ -301,14 +284,13 @@ void doVoiceCommand(VoiceCommandContext& context)
 					float volume;
 					if(parser.parseFloat(volume))
 					{
-						volume = myClamp(volume, 0.f, 0.4f); // TEMP
+						volume = myClamp(volume, 0.f, 0.6f); // prevent volume being set too high.
 						setSystemVolume(volume);
 
 						//const std::string msg_to_speak = "The volume has been set to " + doubleToStringMaxNDecimalPlaces(volume, 2);
 						//HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(msg_to_speak).c_str(), 0, NULL);
 						//if(FAILED(hr))
 						//	throw glare::Exception("voice->Speak failed.");
-
 					}
 					else
 					{
@@ -324,8 +306,6 @@ void doVoiceCommand(VoiceCommandContext& context)
 				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(content).c_str(), 0, NULL);
 				if(FAILED(hr))
 					throw glare::Exception("voice->Speak failed.");
-				
-				break;
 			}
 		}
 		else
@@ -369,7 +349,7 @@ int main(int /*argc*/, char** /*argv*/)
 		const int audio_num_samples = 256;
 
 		SDL_AudioSpec desired_spec;
-		desired_spec.freq = 16000; // 48000;
+		desired_spec.freq = 16000; // This is the sample rate Whisper uses.
 		desired_spec.format = AUDIO_F32;
 		desired_spec.channels = 1;
 		desired_spec.samples = audio_num_samples;
