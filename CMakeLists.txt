@@ -22,34 +22,47 @@ else()
 endif()
 
 
+# GLARE_CORE_TRUNK: Should be set to where the glare-core repo (https://github.com/glaretechnologies/glare-core) trunk is checked out
+set(GLARE_CORE_TRUNK "../glare-core/trunk" CACHE FILEPATH "Glare-core trunk directory")
 
-SET(GLARE_CORE_TRUNK $ENV{GLARE_CORE_TRUNK_DIR})
+# GLARE_CORE_LIBS_DIR: Directory where LibreSSL and SDL are built.  Get from the 'GLARE_CORE_LIBS' environment variable, which is used by scripts/build_libressl.rb in glare-core.
+set(GLARE_CORE_LIBS_DIR $ENV{GLARE_CORE_LIBS})
 
-# Directory where LibreSSL and SDL are built
-SET(LIBS_DIR "c:/programming")
-
-set(SDL_DIR       "${LIBS_DIR}/SDL/SDL-release-2.26.2" CACHE FILEPATH "SDL source directory")
-set(SDL_BUILD_DIR "${LIBS_DIR}/SDL/sdl_build_vs2022"   CACHE FILEPATH "SDL build directory")
-
-
-set(ilmbasedir	"${GLARE_CORE_TRUNK}/IlmBase")
-set(imathdir	"${GLARE_CORE_TRUNK}/Imath") # OpenEXR's math library
-set(openexrdir	"${GLARE_CORE_TRUNK}/OpenEXR")
-set(zlibdir		"${GLARE_CORE_TRUNK}/zlib")
-set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
-set(pngdir		"${GLARE_CORE_TRUNK}/libpng-1.6.37")
+# SDL_BUILD_DIR: Should be set to e.g.  C:\programming\SDL\sdl_build_vs2022
+set(SDL_BUILD_DIR "${GLARE_CORE_LIBS_DIR}/SDL/sdl_build_vs2022"   CACHE FILEPATH "SDL build directory")
 
 
+
+# LibreSSL: Should have been built with scripts/build_libressl.rb in glare-core repo.
 SET(LIBRESSL_VERSION 3.5.2)
 if(WIN32)
-	set(libressldir "${LIBS_DIR}/LibreSSL/libressl-${LIBRESSL_VERSION}-x64-vs${AIBOT_VS_VER}-install")
+	set(libressldir "${GLARE_CORE_LIBS_DIR}/LibreSSL/libressl-${LIBRESSL_VERSION}-x64-vs${AIBOT_VS_VER}-install")
 endif()
 
 
+message("GLARE_CORE_TRUNK: ${GLARE_CORE_TRUNK}")
+message("GLARE_CORE_LIBS_DIR: ${GLARE_CORE_LIBS_DIR}")
+message("SDL_DIR: ${SDL_DIR}")
+message("SDL_BUILD_DIR: ${SDL_BUILD_DIR}")
+message("libressldir: ${libressldir}")
+
+
 include_directories("./")
-include_directories(${SDL_DIR}/include)
+include_directories(${SDL_BUILD_DIR}/include)
 include_directories(${GLARE_CORE_TRUNK})
-include_directories(${GLARE_CORE_TRUNK}/utils)
+
+
+if(WIN32)
+	# Append LibreSSL config paths for the configurations.  Since CMake sucks we do it this way.
+	SET(CMAKE_CXX_FLAGS_RELEASE			"${CMAKE_CXX_FLAGS_RELEASE}			/I\"${SDL_BUILD_DIR}/include-config-release\"")
+	SET(CMAKE_CXX_FLAGS_RELWITHDEBINFO	"${CMAKE_CXX_FLAGS_RELWITHDEBINFO}	/I\"${SDL_BUILD_DIR}/include-config-relwithdebinfo\"")
+	SET(CMAKE_CXX_FLAGS_DEBUG			"${CMAKE_CXX_FLAGS_DEBUG}			/I\"${SDL_BUILD_DIR}/include-config-debug\"")
+else() # linux, mac:
+	SET(CMAKE_CXX_FLAGS	"${CMAKE_CXX_FLAGS} -I${SDL_BUILD_DIR}/include-config-debug")
+endif()
+
+
+set(pugixmldir	"${GLARE_CORE_TRUNK}/pugixml/src")
 
 set(pugixml
 ${pugixmldir}/pugixml.cpp
@@ -68,42 +81,24 @@ ${GLARE_CORE_TRUNK}/utils/Mutex.cpp
 ${GLARE_CORE_TRUNK}/utils/Mutex.h
 ${GLARE_CORE_TRUNK}/utils/Lock.cpp
 ${GLARE_CORE_TRUNK}/utils/Lock.h
-${GLARE_CORE_TRUNK}/utils/StandardPrintOutput.cpp
-${GLARE_CORE_TRUNK}/utils/StandardPrintOutput.h
 ${GLARE_CORE_TRUNK}/utils/FileUtils.cpp
 ${GLARE_CORE_TRUNK}/utils/FileUtils.h
 ${GLARE_CORE_TRUNK}/utils/MemMappedFile.cpp
 ${GLARE_CORE_TRUNK}/utils/MemMappedFile.h
 ${GLARE_CORE_TRUNK}/utils/PlatformUtils.cpp
 ${GLARE_CORE_TRUNK}/utils/PlatformUtils.h
-${GLARE_CORE_TRUNK}/utils/TaskManager.cpp
-${GLARE_CORE_TRUNK}/utils/TaskManager.h
-${GLARE_CORE_TRUNK}/utils/Task.cpp
-${GLARE_CORE_TRUNK}/utils/Task.h
 ${GLARE_CORE_TRUNK}/utils/Condition.cpp
 ${GLARE_CORE_TRUNK}/utils/Condition.h
 ${GLARE_CORE_TRUNK}/utils/MyThread.cpp
 ${GLARE_CORE_TRUNK}/utils/MyThread.h
-${GLARE_CORE_TRUNK}/utils/TaskRunnerThread.cpp
-${GLARE_CORE_TRUNK}/utils/TaskRunnerThread.h
 ${GLARE_CORE_TRUNK}/utils/Parser.cpp
 ${GLARE_CORE_TRUNK}/utils/Parser.h
 ${GLARE_CORE_TRUNK}/utils/Timer.cpp
 ${GLARE_CORE_TRUNK}/utils/Timer.h
 ${GLARE_CORE_TRUNK}/utils/MemAlloc.cpp
 ${GLARE_CORE_TRUNK}/utils/MemAlloc.h
-${GLARE_CORE_TRUNK}/utils/FileInStream.cpp
-${GLARE_CORE_TRUNK}/utils/FileInStream.h
-${GLARE_CORE_TRUNK}/utils/FileOutStream.cpp
-${GLARE_CORE_TRUNK}/utils/FileOutStream.h
 ${GLARE_CORE_TRUNK}/utils/OutStream.cpp
 ${GLARE_CORE_TRUNK}/utils/OutStream.h
-${GLARE_CORE_TRUNK}/utils/InStream.cpp
-${GLARE_CORE_TRUNK}/utils/InStream.h
-${GLARE_CORE_TRUNK}/utils/BufferInStream.cpp
-${GLARE_CORE_TRUNK}/utils/BufferInStream.h
-${GLARE_CORE_TRUNK}/utils/BufferOutStream.cpp
-${GLARE_CORE_TRUNK}/utils/BufferOutStream.h
 ${GLARE_CORE_TRUNK}/utils/TestUtils.cpp
 ${GLARE_CORE_TRUNK}/utils/TestUtils.h
 ${GLARE_CORE_TRUNK}/utils/JSONParser.cpp
