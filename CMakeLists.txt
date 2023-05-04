@@ -104,6 +104,8 @@ ${GLARE_CORE_TRUNK}/utils/JSONParser.cpp
 ${GLARE_CORE_TRUNK}/utils/JSONParser.h
 ${GLARE_CORE_TRUNK}/utils/UTF8Utils.cpp
 ${GLARE_CORE_TRUNK}/utils/UTF8Utils.h
+${GLARE_CORE_TRUNK}/utils/RuntimeCheck.cpp
+${GLARE_CORE_TRUNK}/utils/RuntimeCheck.h
 )
 
 set(maths

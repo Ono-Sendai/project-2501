@@ -302,8 +302,9 @@ void doVoiceCommand(VoiceCommandContext& context)
 					
 				}
 
-				// Speak the response text
-				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(content).c_str(), 0, NULL);
+				// Speak the response text.
+				// Use SPF_PURGEBEFORESPEAK to cancel any existing speech.  Use SPF_ASYNC so we can go back to listening while the voice speaks.
+				HRESULT hr = context.voice->Speak(StringUtils::UTF8ToWString(content).c_str(), SPF_PURGEBEFORESPEAK | SPF_ASYNC, NULL);
 				if(FAILED(hr))
 					throw glare::Exception("voice->Speak failed.");
 			}
@@ -317,7 +318,7 @@ void doVoiceCommand(VoiceCommandContext& context)
 int main(int /*argc*/, char** /*argv*/)
 {
 	Clock::init();
-	Networking::createInstance();
+	Networking::init();
 
 	try
 	{
@@ -351,6 +352,8 @@ int main(int /*argc*/, char** /*argv*/)
 		}
 
 		const char* dev_name = SDL_GetAudioDeviceName(/*index=*/0, /*is capture=*/SDL_TRUE);
+
+		conPrint("Using device " + std::string(dev_name));
 
 		
 		std::vector<float> audio_data;
@@ -458,14 +461,24 @@ int main(int /*argc*/, char** /*argv*/)
 		//context.query = base_prompt;
 		context.base_prompt = base_prompt;
 
+		context.voice->SetRate(2); // Speed up speaking a bit.
+
 		//doVoiceCommand(context);
 		//return 0;
+
 		while(1)
 		{
 			DWORD result = WaitForSingleObject(recognition_event, 1000);
 			if(result == WAIT_OBJECT_0)
 			{
-				conPrint("Recognised word!");
+				conPrint("Recognised trigger word!"); // Recognised trigger word
+
+				// Cancel rest of speech (if any) by skipping over the remaining words.
+				ULONG num_skipped = 0;
+				hr = context.voice->Skip(L"SENTENCE", 10000, &num_skipped);
+				if(FAILED(hr))
+					throw glare::Exception("voice->Skip failed.");
+
 				
 				recognizer->SetRecoState(SPRST_INACTIVE); // Pause trigger word detection while we do a voice command and speak the response.
 
